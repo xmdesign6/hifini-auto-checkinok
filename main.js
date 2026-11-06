@@ -1,19 +1,198 @@
 import { appendFileSync } from "fs";
+import { createHash } from "crypto";
 
-const signPageUrl = "https://www.hifiti.com/sg_sign.htm";
+// 密码 MD5 加密（与站点前端 $.md5 行为一致）
+function md5(input) {
+  return createHash("md5").update(input, "utf8").digest("hex");
+}
+
+const baseUrl = "https://www.hifihi.com";
+const signPageUrl = `${baseUrl}/sg_sign.htm`;
+const loginPageUrl = `${baseUrl}/user-login.htm`;
 const responseSuccessCode = "0";
 
-async function checkIn(account) {
+// ==================== 工具 ====================
+
+const defaultHeaders = {
+  "User-Agent":
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+  Referer: baseUrl,
+};
+
+// ==================== guard 反爬（复现站点 /_guard/auto.js 逻辑） ====================
+
+// RC4 加密（与站点 auto.js 的 rc4 函数一致）
+function rc4(text, key) {
+  const s = [];
+  for (let i = 0; i < 256; i++) s[i] = i;
+  let j = 0;
+  for (let i = 0; i < 256; i++) {
+    j = (j + s[i] + key.charCodeAt(i % key.length)) % 256;
+    const temp = s[i];
+    s[i] = s[j];
+    s[j] = temp;
+  }
+  let i = 0;
+  j = 0;
+  let result = "";
+  for (let k = 0; k < text.length; k++) {
+    i = (i + 1) % 256;
+    j = (j + s[i]) % 256;
+    const temp = s[i];
+    s[i] = s[j];
+    s[j] = temp;
+    result += String.fromCharCode(text.charCodeAt(k) ^ s[(s[i] + s[j]) % 256]);
+  }
+  return result;
+}
+
+// 根据 guard Cookie 计算站点要求的 guardret Cookie
+function solveGuard(guard) {
+  const key = guard.substr(0, 8);
+  const arg = (parseInt(guard.substr(12), 10) * 2 + 18 - 2).toString();
+  return Buffer.from(rc4(arg, key), "latin1").toString("base64");
+}
+
+// 访问站点获取 guard Cookie 并算出 guardret，返回可通过反爬的 Cookie 串
+async function fetchGuardCookies() {
+  let jar = {};
+
+  const parseCookie = (cookieStr) => {
+    for (const part of cookieStr.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx > 0) jar[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
+    }
+  };
+
+  // 第一次访问：拿到 guard Cookie（响应是被反爬拦截的跳转页）
+  const firstResponse = await fetch(loginPageUrl, { headers: defaultHeaders });
+  const setCookieList = extractCookies(firstResponse);
+  for (const item of setCookieList) {
+    parseCookie(item.split(";")[0]);
+  }
+  await firstResponse.text();
+
+  if (!jar.guard) {
+    // 站点未启用 guard 时直接返回已有 Cookie
+    return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ");
+  }
+
+  // 计算 guardret 后重新访问，获取正常会话 Cookie
+  jar.guardret = solveGuard(jar.guard);
+  const guardCookie = Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ");
+
+  const secondResponse = await fetch(loginPageUrl, {
+    headers: { ...defaultHeaders, Cookie: guardCookie },
+  });
+  for (const item of extractCookies(secondResponse)) {
+    parseCookie(item.split(";")[0]);
+  }
+  await secondResponse.text();
+
+  return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join("; ");
+}
+
+// 从响应中提取 Set-Cookie（兼容不同 Node 版本）
+function extractCookies(response) {
+  if (typeof response.headers.getSetCookie === "function") {
+    return response.headers.getSetCookie();
+  }
+  const raw = response.headers.get("set-cookie");
+  if (!raw) return [];
+  // 简易拆分：按 ", " 分割并过滤 Expires 中被误切的情况
+  return raw.split(/,(?=[^;]+?=)/g);
+}
+
+// 将 Set-Cookie 数组合并为 name=value 的 Cookie 字符串
+function mergeCookies(originalCookie, setCookieList) {
+  const jar = {};
+
+  // 解析已有 Cookie
+  if (originalCookie) {
+    for (const part of originalCookie.split(";")) {
+      const idx = part.indexOf("=");
+      if (idx > 0) {
+        jar[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
+      }
+    }
+  }
+
+  // 合并新 Cookie（新值覆盖旧值）
+  for (const item of setCookieList) {
+    const pair = item.split(";")[0];
+    const idx = pair.indexOf("=");
+    if (idx > 0) {
+      jar[pair.slice(0, idx).trim()] = pair.slice(idx + 1).trim();
+    }
+  }
+
+  return Object.entries(jar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
+}
+
+// ==================== 登录 ====================
+
+// 使用账号密码登录，返回签到所需的 Cookie（bbs_sid + bbs_token）
+async function login(account) {
+  console.log(`【${account.name}】: 正在使用账号密码登录...`);
+
+  // 站点前端逻辑：提交前将密码 MD5 加密（见 view/js/md5.js 与登录页 JS）
+  const password = md5(account.password);
+
+  // 先过 guard 反爬，拿到基础 Cookie
+  const guardCookie = await fetchGuardCookies();
+
+  const response = await fetch(loginPageUrl, {
+    method: "POST",
+    headers: {
+      ...defaultHeaders,
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "X-Requested-With": "XMLHttpRequest",
+      Referer: `${baseUrl}/user-login.htm`,
+      Cookie: guardCookie,
+    },
+    body: new URLSearchParams({
+      email: account.username,
+      password,
+    }).toString(),
+  });
+
+  if (!response.ok) {
+    throw new Error(`登录请求出错 - ${response.status}`);
+  }
+
+  const responseJson = await response.json();
+
+  if (responseJson.code !== responseSuccessCode) {
+    throw new Error(`登录失败: ${responseJson.message}`);
+  }
+
+  // 登录成功后在 guard Cookie 基础上合并登录下发的 bbs_sid / bbs_token
+  const cookie = mergeCookies(guardCookie, extractCookies(response));
+
+  if (!cookie.includes("bbs_sid") || !cookie.includes("bbs_token")) {
+    throw new Error(`登录成功但未获取到有效 Cookie。`);
+  }
+
+  console.log(`【${account.name}】: 登录成功。`);
+
+  return cookie;
+}
+
+// ==================== 签到 ====================
+
+async function checkIn(account, cookie) {
   console.log(`【${account.name}】: 开始签到...`);
 
   const response = await fetch(signPageUrl, {
     method: "POST",
     headers: {
+      ...defaultHeaders,
       "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
       "X-Requested-With": "XMLHttpRequest",
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-      Cookie: account.cookie,
+      Referer: `${baseUrl}/`,
+      Cookie: cookie,
     },
   });
 
@@ -37,12 +216,20 @@ async function checkIn(account) {
 
 // 处理
 async function processSingleAccount(account) {
-  const checkInResult = await checkIn(account);
+  let cookie = account.cookie;
+
+  // 未配置 Cookie 时，使用账号密码登录获取
+  if (!cookie) {
+    cookie = await login(account);
+  }
+
+  const checkInResult = await checkIn(account, cookie);
 
   return checkInResult;
 }
 
 function setGitHubOutput(name, value) {
+  if (!process.env.GITHUB_OUTPUT) return;
   appendFileSync(process.env.GITHUB_OUTPUT, `${name}<<EOF\n${value}\nEOF\n`);
 }
 
@@ -61,6 +248,16 @@ async function main() {
     console.error(message);
     setGitHubOutput("result", message);
     process.exit(1);
+  }
+
+  // 校验账户配置：Cookie 或 账号密码 至少配置一项
+  for (const account of accounts) {
+    if (!account.cookie && (!account.username || !account.password)) {
+      const message = `❌ 账户 [${account.name || "未命名"}] 未配置 Cookie 或 账号密码（username + password）。`;
+      console.error(message);
+      setGitHubOutput("result", message);
+      process.exit(1);
+    }
   }
 
   const allPromises = accounts.map((account) => processSingleAccount(account));
