@@ -24,6 +24,18 @@ jobs:
         with:
           node-version: latest
 
+      - name: Network diagnosis
+        shell: bash
+        run: |
+          for d in www.hifini.com.cn www.hifihi.com www.hifini.net; do
+            echo "=== $d ==="
+            echo "--- DNS ---"
+            nslookup "$d" 2>&1 | tail -6 || true
+            echo "--- curl ---"
+            curl -sv --max-time 15 "https://$d/" -o /dev/null 2>&1 | grep -E "Trying|Connected|SSL|HTTP|error|timed out|refused|reset" || true
+            echo ""
+          done
+
       - name: Checkin
         id: checkin
         shell: bash
