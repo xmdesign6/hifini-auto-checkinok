@@ -58,6 +58,17 @@
 
 - **TELEGRAM_TOKEN**: （可选）Telegram 通知的 Bot Token。
 - **TELEGRAM_TO**: （可选）Telegram 通知的 Chat ID。
+- **WECOM_WEBHOOK**: （可选）企业微信群机器人 Webhook。支持填写完整 Webhook 地址（`https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx`）或仅机器人 Key（`xxx`）。企业微信群 → 右键群聊 → 添加群机器人 → 复制 Webhook 地址即可获取。
+
+### 通知示例
+
+企业微信通知效果（Markdown 格式）：
+
+```
+HIFINI 自动签到
+xiaobai: ✅ 今天已经签过啦！
+[任务详情](GitHub Actions 运行链接)
+```
 
 ### 注意事项
 

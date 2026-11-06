@@ -277,6 +277,46 @@ async function processSingleAccount(account) {
   return await checkIn(account, cookie, baseUrl);
 }
 
+// ==================== 企业微信通知（群机器人 Webhook） ====================
+
+// 发送企业微信通知，WECOM_WEBHOOK 支持完整 Webhook 地址或仅机器人 Key
+async function notifyWeCom(resultMsg) {
+  const webhook = process.env.WECOM_WEBHOOK;
+  if (!webhook) return;
+
+  const url = webhook.startsWith("http")
+    ? webhook
+    : `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=${webhook}`;
+
+  // GitHub Actions 运行详情链接（本地运行时为空则不拼接）
+  const runLink =
+    process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
+      ? `\n[任务详情](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})`
+      : "";
+
+  // 企业微信 markdown 内容上限 4096 字节，超长截断
+  let content = `**HIFINI 自动签到**\n${resultMsg}${runLink}`;
+  if (Buffer.byteLength(content, "utf8") > 4000) {
+    content = content.slice(0, 4000) + "\n...（内容过长已截断）";
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json; charset=UTF-8" },
+      body: JSON.stringify({ msgtype: "markdown", markdown: { content } }),
+    });
+    const responseJson = await response.json();
+    if (responseJson.errcode === 0) {
+      console.log("企业微信通知发送成功。");
+    } else {
+      console.error(`企业微信通知发送失败: ${JSON.stringify(responseJson)}`);
+    }
+  } catch (error) {
+    console.error(`企业微信通知发送出错: ${error.message}`);
+  }
+}
+
 function setGitHubOutput(name, value) {
   if (!process.env.GITHUB_OUTPUT) return;
   appendFileSync(process.env.GITHUB_OUTPUT, `${name}<<EOF\n${value}\nEOF\n`);
@@ -339,6 +379,9 @@ async function main() {
   const resultMsg = resultLines.join("\n");
 
   setGitHubOutput("result", resultMsg);
+
+  // 发送企业微信通知（未配置 WECOM_WEBHOOK 时自动跳过）
+  await notifyWeCom(resultMsg);
 
   if (hasError) {
     process.exit(1);
