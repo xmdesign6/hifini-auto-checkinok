@@ -6,9 +6,12 @@ function md5(input) {
   return createHash("md5").update(input, "utf8").digest("hex");
 }
 
-const baseUrl = "https://www.hifihi.com";
-const signPageUrl = `${baseUrl}/sg_sign.htm`;
-const loginPageUrl = `${baseUrl}/user-login.htm`;
+// 站点域名列表：主域名在前，备用域名依次容灾
+const baseUrls = [
+  "https://www.hifini.com.cn", // 本站主域名
+  "https://www.hifihi.com", // 备用域名
+  "https://www.hifini.net", // 备用域名
+];
 const responseSuccessCode = "0";
 
 // ==================== 工具 ====================
@@ -16,7 +19,6 @@ const responseSuccessCode = "0";
 const defaultHeaders = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-  Referer: baseUrl,
 };
 
 // ==================== guard 反爬（复现站点 /_guard/auto.js 逻辑） ====================
@@ -54,7 +56,7 @@ function solveGuard(guard) {
 }
 
 // 访问站点获取 guard Cookie 并算出 guardret，返回可通过反爬的 Cookie 串
-async function fetchGuardCookies() {
+async function fetchGuardCookies(baseUrl) {
   let jar = {};
 
   const parseCookie = (cookieStr) => {
@@ -64,10 +66,11 @@ async function fetchGuardCookies() {
     }
   };
 
+  const loginPageUrl = `${baseUrl}/user-login.htm`;
+
   // 第一次访问：拿到 guard Cookie（响应是被反爬拦截的跳转页）
   const firstResponse = await fetch(loginPageUrl, { headers: defaultHeaders });
-  const setCookieList = extractCookies(firstResponse);
-  for (const item of setCookieList) {
+  for (const item of extractCookies(firstResponse)) {
     parseCookie(item.split(";")[0]);
   }
   await firstResponse.text();
@@ -133,17 +136,15 @@ function mergeCookies(originalCookie, setCookieList) {
 
 // ==================== 登录 ====================
 
-// 使用账号密码登录，返回签到所需的 Cookie（bbs_sid + bbs_token）
-async function login(account) {
-  console.log(`【${account.name}】: 正在使用账号密码登录...`);
-
+// 使用账号密码在指定域名上登录，返回签到所需的 Cookie（bbs_sid + bbs_token）
+async function loginOnDomain(account, baseUrl) {
   // 站点前端逻辑：提交前将密码 MD5 加密（见 view/js/md5.js 与登录页 JS）
   const password = md5(account.password);
 
   // 先过 guard 反爬，拿到基础 Cookie
-  const guardCookie = await fetchGuardCookies();
+  const guardCookie = await fetchGuardCookies(baseUrl);
 
-  const response = await fetch(loginPageUrl, {
+  const response = await fetch(`${baseUrl}/user-login.htm`, {
     method: "POST",
     headers: {
       ...defaultHeaders,
@@ -175,17 +176,33 @@ async function login(account) {
     throw new Error(`登录成功但未获取到有效 Cookie。`);
   }
 
-  console.log(`【${account.name}】: 登录成功。`);
-
   return cookie;
+}
+
+// 多域名容灾登录：依次尝试所有域名，返回 { cookie, baseUrl }
+async function login(account) {
+  console.log(`【${account.name}】: 正在使用账号密码登录...`);
+
+  const errors = [];
+
+  for (const baseUrl of baseUrls) {
+    try {
+      const cookie = await loginOnDomain(account, baseUrl);
+      console.log(`【${account.name}】: 登录成功（${baseUrl}）。`);
+      return { cookie, baseUrl };
+    } catch (error) {
+      errors.push(`${baseUrl}: ${error.message}`);
+    }
+  }
+
+  throw new Error(`所有域名登录失败（${errors.join("；")}）`);
 }
 
 // ==================== 签到 ====================
 
-async function checkIn(account, cookie) {
-  console.log(`【${account.name}】: 开始签到...`);
-
-  const response = await fetch(signPageUrl, {
+// 在指定域名上签到；响应不是有效 JSON（被 guard 拦截）时抛出可容灾的错误
+async function checkInOnDomain(account, cookie, baseUrl) {
+  const response = await fetch(`${baseUrl}/sg_sign.htm`, {
     method: "POST",
     headers: {
       ...defaultHeaders,
@@ -200,32 +217,64 @@ async function checkIn(account, cookie) {
     throw new Error(`网络请求出错 - ${response.status}`);
   }
 
-  const responseJson = await response.json();
+  const text = await response.text();
+
+  let responseJson;
+  try {
+    responseJson = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`DOMAIN_FAIL`);
+  }
 
   if (responseJson.code === responseSuccessCode) {
-    console.log(`【${account.name}】: 签到成功。`);
     return responseJson.message;
   } else {
     if (responseJson.message === "今天已经签过啦！") {
-      console.log(`【${account.name}】: ${responseJson.message}`);
       return responseJson.message;
+    }
+    // 未登录类提示说明 Cookie 在此域名上无效，可尝试其他域名
+    if (typeof responseJson.message === "string" && (responseJson.message.includes("登录") || responseJson.message.includes("用户"))) {
+      throw new Error(`DOMAIN_FAIL`);
     }
     throw new Error(`签到失败: ${responseJson.message}`);
   }
 }
 
-// 处理
-async function processSingleAccount(account) {
-  let cookie = account.cookie;
+// 多域名容灾签到
+async function checkIn(account, cookie, fixedBaseUrl) {
+  console.log(`【${account.name}】: 开始签到...`);
 
-  // 未配置 Cookie 时，使用账号密码登录获取
-  if (!cookie) {
-    cookie = await login(account);
+  // 账号密码登录成功时已确定可用域名，优先使用
+  const domains = fixedBaseUrl ? [fixedBaseUrl, ...baseUrls.filter((u) => u !== fixedBaseUrl)] : baseUrls;
+
+  const errors = [];
+
+  for (const baseUrl of domains) {
+    try {
+      const message = await checkInOnDomain(account, cookie, baseUrl);
+      console.log(`【${account.name}】: ${message}（${baseUrl}）`);
+      return message;
+    } catch (error) {
+      if (error.message !== "DOMAIN_FAIL") {
+        throw error;
+      }
+      errors.push(baseUrl);
+    }
   }
 
-  const checkInResult = await checkIn(account, cookie);
+  throw new Error(`签到失败: 所有域名均无法完成签到（${errors.join("、")}）`);
+}
 
-  return checkInResult;
+// 处理
+async function processSingleAccount(account) {
+  if (account.cookie) {
+    // Cookie 模式：Cookie 与域名绑定，自动容灾尝试所有域名
+    return await checkIn(account, account.cookie, null);
+  }
+
+  // 账号密码模式：登录成功的域名即为可用域名
+  const { cookie, baseUrl } = await login(account);
+  return await checkIn(account, cookie, baseUrl);
 }
 
 function setGitHubOutput(name, value) {

@@ -1,6 +1,8 @@
 ## HIFINI 音乐磁场 定时自动签到
 
-支持多账号同时签到。支持账号密码登录（自动过 guard 反爬）与 Cookie 两种方式。支持 Telegram 通知。仅支持 `hifihi.com`.
+支持多账号同时签到。支持账号密码登录（自动过 guard 反爬）与 Cookie 两种方式。支持 Telegram 通知。
+
+站点域名自动容灾：主域名 `hifini.com.cn` → 备用 `hifihi.com` → 备用 `hifini.net`，依次自动尝试。
 
 [![HIFINI-Auto-Checkin](https://github.com/ewigl/hifini-auto-checkin/actions/workflows/Checkin.yml/badge.svg)](https://github.com/ewigl/hifini-auto-checkin/actions/workflows/Checkin.yml)
 
@@ -48,7 +50,7 @@
 
   获取 Cookie: 
   
-  登陆 hifihi.com 后，打开浏览器控制台，在网络监控界面获取 Cookie，确保 Cookie 包含 bbs_token 与 bbs_sid 两个字段。使用网站右上角的“退出”按钮退出登录会使 Cookie 失效。
+  登陆 hifini.com.cn 后，打开浏览器控制台，在网络监控界面获取 Cookie，确保 Cookie 包含 bbs_token 与 bbs_sid 两个字段。使用网站右上角的“退出”按钮退出登录会使 Cookie 失效。（Cookie 与域名绑定，程序会自动在所有域名上尝试）
 
   ![获取 Cookie](https://raw.githubusercontent.com/ewigl/hifini-auto-checkin/main/imgs/001.png)
 
