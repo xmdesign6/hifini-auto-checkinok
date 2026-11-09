@@ -2,9 +2,11 @@ name: HIFITI-Auto-Checkin
 
 on:
   workflow_dispatch:
-  schedule:
-    # UTC
-    - cron: "40 23 * * *"
+  # 注意：站点防火墙会拦截 GitHub Actions 海外 IP（fetch failed），
+  # 定时运行请改用国内服务器执行 server-deploy/checkin.php（见该目录 README）。
+  # schedule:
+  #   # UTC
+  #   - cron: "40 23 * * *"
 
 jobs:
   checkin:
