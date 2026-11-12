@@ -33,9 +33,9 @@
 
 | 配置 | 说明 |
 |---|---|
-| `$ACCOUNTS` | 账号列表，`username`+`password`（账号密码模式）或 `cookie`（Cookie 模式），可混用、支持多账号 |
+| `$ACCOUNTS` | 账号列表，`username`+`password`（账号密码模式）或 `cookie`（Cookie 模式），可混用、支持多账号。可选 `site` 字段选站点（`hifini` 默认 / `hifiti`） |
 | `$WECOM_WEBHOOK` | 企业微信群机器人 Webhook 地址或仅 Key，留空则不通知 |
-| `$BASE_URLS` | 站点域名容灾顺序，一般无需修改 |
+| `$SITE_DOMAINS` | 各站点的域名容灾列表，账号通过 `site` 字段引用 key，一般无需修改 |
 
 ### 注意
 

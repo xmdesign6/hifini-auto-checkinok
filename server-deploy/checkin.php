@@ -24,6 +24,17 @@ require __DIR__ . '/config.php';
 const SUCCESS_CODE = '0';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
 
+/** 获取账户所属站点的域名容灾列表（账户 site 字段选站点，默认 hifini） */
+function accountDomains(array $account): array
+{
+    global $SITE_DOMAINS;
+    $site = $account['site'] ?? 'hifini';
+    if (!isset($SITE_DOMAINS[$site])) {
+        throw new RuntimeException('未知站点: ' . $site . '（可选: ' . implode('、', array_keys($SITE_DOMAINS)) . '）');
+    }
+    return $SITE_DOMAINS[$site];
+}
+
 // ==================== 网络请求 ====================
 
 /**
@@ -278,9 +289,8 @@ function logLine(string $message): void
 /** 多域名容灾登录，返回可用的域名 */
 function loginWithFailover(array $account): string
 {
-    global $BASE_URLS;
     $errors = [];
-    foreach ($BASE_URLS as $baseUrl) {
+    foreach (accountDomains($account) as $baseUrl) {
         try {
             $jar = [];
             loginOnDomain($account, $baseUrl, $jar);
@@ -312,11 +322,10 @@ function fetchCoins(array $jar, string $baseUrl): ?int
 /** 多域名容灾签到（Cookie 模式下 Cookie 与域名绑定，需逐域名尝试），返回 ['message', 'jar', 'baseUrl'] */
 function checkInWithFailover(array $account, array $jar, ?string $fixedBaseUrl): array
 {
-    global $BASE_URLS;
-
+    $allDomains = accountDomains($account);
     $domains = $fixedBaseUrl !== null
-        ? array_merge([$fixedBaseUrl], array_values(array_diff($BASE_URLS, [$fixedBaseUrl])))
-        : $BASE_URLS;
+        ? array_merge([$fixedBaseUrl], array_values(array_diff($allDomains, [$fixedBaseUrl])))
+        : $allDomains;
 
     $failedDomains = [];
     foreach ($domains as $baseUrl) {

@@ -6,13 +6,29 @@ function md5(input) {
   return createHash("md5").update(input, "utf8").digest("hex");
 }
 
-// 站点域名列表：主域名在前，备用域名依次容灾
-const baseUrls = [
-  "https://www.hifini.com.cn", // 本站主域名
-  "https://www.hifihi.com", // 备用域名
-  "https://www.hifini.net", // 备用域名
-];
+// 站点配置：每个站点一套域名容灾列表（主域名在前）
+const siteDomains = {
+  hifini: [
+    "https://www.hifini.com.cn", // 本站主域名
+    "https://www.hifihi.com", // 备用域名
+    "https://www.hifini.net", // 备用域名
+  ],
+  hifiti: [
+    "https://www.hifiti.com",
+  ],
+};
+const defaultSite = "hifini";
 const responseSuccessCode = "0";
+
+// 获取账户所属站点的域名容灾列表
+function accountDomains(account) {
+  const site = account.site || defaultSite;
+  const domains = siteDomains[site];
+  if (!domains) {
+    throw new Error(`未知站点: ${site}（可选: ${Object.keys(siteDomains).join("、")}）`);
+  }
+  return domains;
+}
 
 // ==================== 工具 ====================
 
@@ -185,7 +201,7 @@ async function login(account) {
 
   const errors = [];
 
-  for (const baseUrl of baseUrls) {
+  for (const baseUrl of accountDomains(account)) {
     try {
       const cookie = await loginOnDomain(account, baseUrl);
       console.log(`【${account.name}】: 登录成功（${baseUrl}）。`);
@@ -245,7 +261,8 @@ async function checkIn(account, cookie, fixedBaseUrl) {
   console.log(`【${account.name}】: 开始签到...`);
 
   // 账号密码登录成功时已确定可用域名，优先使用
-  const domains = fixedBaseUrl ? [fixedBaseUrl, ...baseUrls.filter((u) => u !== fixedBaseUrl)] : baseUrls;
+  const allDomains = accountDomains(account);
+  const domains = fixedBaseUrl ? [fixedBaseUrl, ...allDomains.filter((u) => u !== fixedBaseUrl)] : allDomains;
 
   const errors = [];
 
