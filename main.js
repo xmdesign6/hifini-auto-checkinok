@@ -240,7 +240,7 @@ async function checkInOnDomain(account, cookie, baseUrl) {
   }
 }
 
-// 多域名容灾签到
+// 多域名容灾签到，返回 { message, baseUrl }
 async function checkIn(account, cookie, fixedBaseUrl) {
   console.log(`【${account.name}】: 开始签到...`);
 
@@ -253,7 +253,7 @@ async function checkIn(account, cookie, fixedBaseUrl) {
     try {
       const message = await checkInOnDomain(account, cookie, baseUrl);
       console.log(`【${account.name}】: ${message}（${baseUrl}）`);
-      return message;
+      return { message, baseUrl };
     } catch (error) {
       if (error.message !== "DOMAIN_FAIL") {
         throw error;
@@ -265,16 +265,41 @@ async function checkIn(account, cookie, fixedBaseUrl) {
   throw new Error(`签到失败: 所有域名均无法完成签到（${errors.join("、")}）`);
 }
 
+// 查询账户现有金币数量（my.htm 页面金币字段），失败返回 null 不影响签到
+async function fetchCoins(cookie, baseUrl) {
+  try {
+    const response = await fetch(`${baseUrl}/my.htm`, {
+      headers: { ...defaultHeaders, Cookie: cookie },
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    const match = html.match(/金币[^<]*<\/span>\s*<em[^>]*>(\d+)</);
+    return match ? Number(match[1]) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 // 处理
 async function processSingleAccount(account) {
+  let cookie;
+  let result;
+
   if (account.cookie) {
     // Cookie 模式：Cookie 与域名绑定，自动容灾尝试所有域名
-    return await checkIn(account, account.cookie, null);
+    cookie = account.cookie;
+    result = await checkIn(account, cookie, null);
+  } else {
+    // 账号密码模式：登录成功的域名即为可用域名
+    const loginResult = await login(account);
+    cookie = loginResult.cookie;
+    result = await checkIn(account, cookie, loginResult.baseUrl);
   }
 
-  // 账号密码模式：登录成功的域名即为可用域名
-  const { cookie, baseUrl } = await login(account);
-  return await checkIn(account, cookie, baseUrl);
+  // 查询现有金币数量并附加到结果
+  const coins = await fetchCoins(cookie, result.baseUrl);
+
+  return coins !== null ? `${result.message}（现有金币：${coins}）` : result.message;
 }
 
 // ==================== 企业微信通知（群机器人 Webhook） ====================

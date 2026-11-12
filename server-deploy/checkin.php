@@ -292,8 +292,25 @@ function loginWithFailover(array $account): string
     throw new RuntimeException('所有域名登录失败（' . implode('；', $errors) . '）');
 }
 
-/** 多域名容灾签到（Cookie 模式下 Cookie 与域名绑定，需逐域名尝试） */
-function checkInWithFailover(array $account, array $jar, ?string $fixedBaseUrl): string
+// 查询账户现有金币数量（my.htm 页面金币字段），失败返回 null 不影响签到
+function fetchCoins(array $jar, string $baseUrl): ?int
+{
+    try {
+        $response = httpRequest($baseUrl . '/my.htm', 'GET', null, $jar);
+        if ($response['status'] !== 200) {
+            return null;
+        }
+        if (preg_match('/金币[^<]*<\/span>\s*<em[^>]*>(\d+)</u', $response['body'], $m)) {
+            return (int)$m[1];
+        }
+        return null;
+    } catch (Exception $e) {
+        return null;
+    }
+}
+
+/** 多域名容灾签到（Cookie 模式下 Cookie 与域名绑定，需逐域名尝试），返回 ['message', 'jar', 'baseUrl'] */
+function checkInWithFailover(array $account, array $jar, ?string $fixedBaseUrl): array
 {
     global $BASE_URLS;
 
@@ -305,7 +322,8 @@ function checkInWithFailover(array $account, array $jar, ?string $fixedBaseUrl):
     foreach ($domains as $baseUrl) {
         $tryJar = $jar;
         try {
-            return checkInOnDomain($account, $tryJar, $baseUrl);
+            $message = checkInOnDomain($account, $tryJar, $baseUrl);
+            return ['message' => $message, 'jar' => $tryJar, 'baseUrl' => $baseUrl];
         } catch (DomainFailException $e) {
             $failedDomains[] = $baseUrl;
         }
@@ -333,7 +351,7 @@ foreach ($ACCOUNTS as $account) {
                     $jar[trim(substr($part, 0, $pos))] = substr($part, $pos + 1);
                 }
             }
-            $message = checkInWithFailover($account, $jar, null);
+            $result = checkInWithFailover($account, $jar, null);
         } elseif (!empty($account['username']) && !empty($account['password'])) {
             // 账号密码模式
             logLine("【{$name}】: 正在使用账号密码登录...");
@@ -342,10 +360,14 @@ foreach ($ACCOUNTS as $account) {
             $jar = [];
             loginOnDomain($account, $baseUrl, $jar);
             logLine("【{$name}】: 开始签到...");
-            $message = checkInWithFailover($account, $jar, $baseUrl);
+            $result = checkInWithFailover($account, $jar, $baseUrl);
         } else {
             throw new RuntimeException('未配置 Cookie 或 账号密码（username + password）');
         }
+
+        // 查询现有金币数量并附加到结果
+        $coins = fetchCoins($result['jar'], $result['baseUrl']);
+        $message = $result['message'] . ($coins !== null ? "（现有金币：{$coins}）" : '');
 
         logLine("【{$name}】: {$message}");
         $resultLines[] = "$name: ✅ $message";
